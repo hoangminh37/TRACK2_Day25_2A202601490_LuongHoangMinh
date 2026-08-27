@@ -46,6 +46,23 @@ def run(verbose: bool = True) -> dict:
         on_demand = num(catalog_by_type()[s["gpu_type"]]["on_demand_hr"])
         idle_waste += metrics.idle_waste_usd(s["idle_hours"], on_demand)
 
+    # --- Extension 2: Right-sizing memory-bound GPUs based on MBU & $/GB-VRAM ---
+    mbu_recs = []
+    total_mbu_hourly_savings = 0.0
+    for s in summary:
+        gtype = s["gpu_type"]
+        peak_bw = num(cat[gtype]["peak_bw_tbs"])
+        achieved_bw = s["mbu"] * peak_bw
+        rec = metrics.recommend_mbu_rightsize(gtype, achieved_bw, cat, headroom=1.20)
+        rec["gpu_id"] = s["gpu_id"]
+        rec["mbu"] = s["mbu"]
+        rec["gpu_util_pct"] = s["gpu_util_pct"]
+        if rec["is_rightsized"]:
+            mbu_recs.append(rec)
+            total_mbu_hourly_savings += rec["hourly_savings"]
+
+    mbu_monthly_savings = total_mbu_hourly_savings * 24 * 30
+
     if verbose:
         print("== M1 Efficiency Audit ==")
         print(f"{'GPU':14}{'type':7}{'util%':>7}{'MFU':>7}{'MBU':>7}{'idle_h':>8}")
@@ -54,8 +71,33 @@ def run(verbose: bool = True) -> dict:
         print(f"\nGPU-Util LIES (util>=90% but MFU<30%): {[l['gpu_id'] for l in lies]}")
         print(f"Idle waste (1 day): ${idle_waste:,.2f}  ->  ${idle_waste*30:,.0f}/month")
 
-    return {"summary": summary, "lies": lies, "idle_waste_daily": round(idle_waste, 2)}
+        # Extension 2 Output
+        print("\n" + "=" * 65)
+        print("  EXTENSION 2: MBU Right-Sizing for Memory-Bound Workloads")
+        print("=" * 65)
+        print("Catalog VRAM & Bandwidth Economics:")
+        print(f"  {'GPU':8}{'VRAM(GB)':>10}{'BW(TB/s)':>10}{'$/hr':>8}{'$/GB-hr':>12}")
+        for gtype, spec in sorted(cat.items(), key=lambda x: num(x[1]["on_demand_hr"])):
+            vcost = metrics.vram_cost_per_gb(num(spec["on_demand_hr"]), num(spec["hbm_gb"]))
+            print(f"  {gtype:8}{num(spec['hbm_gb']):>10.0f}{num(spec['peak_bw_tbs']):>10.2f}${num(spec['on_demand_hr']):>7.2f}${vcost:>11.4f}")
+
+        print("\nMBU Right-Sizing Recommendations (Memory-Bound GPUs):")
+        print(f"  {'GPU ID':14}{'Current':8}{'Achieved BW':>13}{'Target GPU':12}{'Savings/mo':>12}{'Saved%':>8}")
+        for r in mbu_recs:
+            mo_sav = r["hourly_savings"] * 24 * 30
+            print(f"  {r['gpu_id']:14}{r['current_gpu']:8}{r['achieved_bw_tbs']:>11.2f} TB/s  -> {r['recommended_gpu']:8}${mo_sav:>10.0f}{r['savings_pct']:>7.1f}%")
+        print(f"\nTotal MBU Right-Sizing Potential: ${mbu_monthly_savings:,.0f}/month")
+        print("=" * 65)
+
+    return {
+        "summary": summary,
+        "lies": lies,
+        "idle_waste_daily": round(idle_waste, 2),
+        "mbu_rightsizing": mbu_recs,
+        "mbu_monthly_savings": round(mbu_monthly_savings, 2),
+    }
 
 
 if __name__ == "__main__":
     run()
+

@@ -52,7 +52,28 @@ def run(verbose: bool = True) -> dict:
         "best_region": min(sustainability.REGION_CARBON, key=sustainability.REGION_CARBON.get),
     }
 
-    md = report.build_report(baseline, optimized, levers, sustainability=sust)
+    unit_econ = {
+        "baseline_per_m": r2["baseline_per_m"],
+        "optimized_per_m": r2["optimized_per_m"],
+        "savings_pct": r2["savings_pct"],
+    }
+
+    ext_data = {
+        "mbu_rightsizing": {
+            "mbu_monthly_savings": r1.get("mbu_monthly_savings", 0),
+            "mbu_rightsizing": r1.get("mbu_rightsizing", []),
+        },
+        "reasoning_governance": r2.get("reasoning_governance", {}),
+    }
+
+    md = report.build_report(
+        baseline,
+        optimized,
+        levers,
+        sustainability=sust,
+        unit_economics=unit_econ,
+        extensions=ext_data,
+    )
     out_md = os.path.join(ROOT, "outputs", "report.md")
     os.makedirs(os.path.dirname(out_md), exist_ok=True)
     with open(out_md, "w") as f:
@@ -64,9 +85,16 @@ def run(verbose: bool = True) -> dict:
         print(md)
         print(f"\nWritten: outputs/report.md" + (f" + outputs/savings.png" if png else " (matplotlib absent: PNG skipped)"))
 
-    return {"baseline_monthly": round(baseline), "optimized_monthly": round(optimized),
-            "levers": levers, "total_savings_pct": round(total_pct, 1)}
+    return {
+        "baseline_monthly": round(baseline),
+        "optimized_monthly": round(optimized),
+        "levers": levers,
+        "total_savings_pct": round(total_pct, 1),
+        "unit_economics": unit_econ,
+        "extensions": ext_data,
+    }
 
 
 if __name__ == "__main__":
     run()
+

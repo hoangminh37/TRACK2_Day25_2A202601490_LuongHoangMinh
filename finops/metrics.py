@@ -61,3 +61,68 @@ def flag_util_lies(rows, util_threshold: float = 0.90, mfu_threshold: float = 0.
 def idle_waste_usd(idle_hours: float, on_demand_hr: float) -> float:
     """Dollars burned by a GPU left running idle (training done, instance up)."""
     return max(0.0, idle_hours) * max(0.0, on_demand_hr)
+
+
+def vram_cost_per_gb(on_demand_hr: float, hbm_gb: float) -> float:
+    """Cost per GB of VRAM per hour ($/GB-hr). Lower is better for memory-capacity-bound tasks."""
+    if hbm_gb <= 0:
+        return 0.0
+    return max(0.0, on_demand_hr) / hbm_gb
+
+
+def recommend_mbu_rightsize(
+    current_gpu_type: str,
+    achieved_bw_tbs: float,
+    catalog: dict,
+    headroom: float = 1.20,
+) -> dict:
+    """Recommend a cheaper GPU that satisfies the memory bandwidth requirement.
+
+    For memory-bound workloads (like LLM decode or low-concurrency inference),
+    the bottleneck is memory bandwidth, not compute FLOPs. If a cheaper GPU has
+    sufficient peak_bw_tbs >= achieved_bw_tbs * headroom, we can rightsize down.
+
+    Returns dict with candidate info, hourly delta, and percent saved.
+    """
+    if current_gpu_type not in catalog:
+        return {
+            "current_gpu": current_gpu_type,
+            "current_cost_hr": 0.0,
+            "achieved_bw_tbs": achieved_bw_tbs,
+            "required_bw_tbs": achieved_bw_tbs * headroom,
+            "recommended_gpu": current_gpu_type,
+            "recommended_cost_hr": 0.0,
+            "hourly_savings": 0.0,
+            "savings_pct": 0.0,
+            "is_rightsized": False,
+        }
+
+    curr_spec = catalog[current_gpu_type]
+    curr_cost = float(curr_spec["on_demand_hr"])
+    required_bw = achieved_bw_tbs * headroom
+
+    cheapest_type = current_gpu_type
+    cheapest_cost = curr_cost
+
+    for gtype, spec in catalog.items():
+        cost = float(spec["on_demand_hr"])
+        peak_bw = float(spec["peak_bw_tbs"])
+        if cost < cheapest_cost and peak_bw >= required_bw:
+            cheapest_type = gtype
+            cheapest_cost = cost
+
+    savings = curr_cost - cheapest_cost
+    savings_pct = (savings / curr_cost * 100.0) if curr_cost > 0 else 0.0
+
+    return {
+        "current_gpu": current_gpu_type,
+        "current_cost_hr": curr_cost,
+        "achieved_bw_tbs": round(achieved_bw_tbs, 3),
+        "required_bw_tbs": round(required_bw, 3),
+        "recommended_gpu": cheapest_type,
+        "recommended_cost_hr": cheapest_cost,
+        "hourly_savings": round(savings, 4),
+        "savings_pct": round(savings_pct, 1),
+        "is_rightsized": cheapest_type != current_gpu_type,
+    }
+
